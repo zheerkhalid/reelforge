@@ -1,6 +1,6 @@
 [package]
 name = "reelforge"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Fast, easy video and audio converter with GPU acceleration"
 authors = ["Zheer Khalid (https://zheer.dev)"]

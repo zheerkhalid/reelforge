@@ -435,7 +435,8 @@ pub fn library() -> Vec<Profile> {
     // ---------------- Recommended (one-click picks) ----------------
     let r = "Recommended";
     b.add(r, "MP4 – works everywhere (H.264)", "mp4", V::H264, A::Aac, 0, 0, 0.0, High, 160, "Plays on phones, TVs, browsers and every computer. Keeps the original size.");
-    b.add(r, "MP4 – smaller file, same quality (H.265)", "mp4", V::H265, A::Aac, 0, 0, 0.0, High, 160, "About half the size of H.264 at the same quality. Plays on recent devices.");
+    b.add(r, "MP4 – HEVC / H.265: smaller file, same quality", "mp4", V::H265, A::Aac, 0, 0, 0.0, High, 160, "About half the size of H.264 at the same quality. Plays on recent devices.");
+    b.add(r, "MP4 – HEVC / H.265: very small file", "mp4", V::H265, A::Aac, 0, 0, 0.0, Medium, 128, "The smallest good-looking file. Keeps the original size; ideal for storing or sending long videos.");
     b.add(r, "MP4 – tiny file for sharing (720p)", "mp4", V::H264, A::Aac, 0, 720, 0.0, Low, 96, "Good for messaging apps and email.");
     b.add(r, "MKV – best quality archive (H.265 10-bit)", "mkv", V::H265, A::Flac, 0, 0, 0.0, Best, 0, "Near-lossless picture, lossless sound.").ten_bit = true;
     b.add(r, "AV1 – newest, smallest (MP4)", "mp4", V::Av1, A::Opus, 0, 0, 0.0, High, 128, "Best compression available. Needs a recent player.");

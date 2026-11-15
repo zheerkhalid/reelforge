@@ -7,13 +7,13 @@
 ### Convert any video or audio, fast. Your graphics card does the heavy lifting.
 
 A friendly, native video and audio converter for Windows, written in **Rust**.
-Pick a file, pick one of **408 ready-made profiles**, and press **Convert**.
+Pick a file, pick one of **409 ready-made profiles**, and press **Convert**.
 
 <p>
   <img alt="Platform" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=for-the-badge&logo=windows11&logoColor=white" />
   <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-B7410E?style=for-the-badge&logo=rust&logoColor=white" />
   <img alt="License" src="https://img.shields.io/badge/License-MIT-E02F7A?style=for-the-badge" />
-  <img alt="Profiles" src="https://img.shields.io/badge/profiles-408-FF8A3D?style=for-the-badge" />
+  <img alt="Profiles" src="https://img.shields.io/badge/profiles-409-FF8A3D?style=for-the-badge" />
 </p>
 
 <p>
@@ -47,6 +47,7 @@ Pick a file, pick one of **408 ready-made profiles**, and press **Convert**.
 ### ⚡ GPU acceleration
 - Finds every graphics card Windows reports and **proves each hardware encoder works** with a tiny test encode, so it only offers what actually runs
 - **NVIDIA NVENC**, **AMD AMF** and **Intel Quick Sync** for H.264, HEVC and AV1
+- **HEVC (H.265)** one click away: about half the size of H.264 at the same quality
 - Discrete (external) cards are preferred over integrated ones
 - GPU decoding as well as encoding, with automatic fallback to the processor
 
@@ -91,7 +92,7 @@ Pick a file, pick one of **408 ready-made profiles**, and press **Convert**.
 
 <table>
 <tr>
-<td align="center"><img src="docs/screenshots/formats.png" alt="Format picker" /><br/><sub><b>Format picker</b>: 408 profiles in 20 categories, searchable</sub></td>
+<td align="center"><img src="docs/screenshots/formats.png" alt="Format picker" /><br/><sub><b>Format picker</b>: 409 profiles in 20 categories, searchable</sub></td>
 </tr>
 <tr>
 <td align="center"><img src="docs/screenshots/customize.png" alt="Customize format" /><br/><sub><b>Customize</b>: codec, size, frame rate, quality and audio, with a before/after table and the expected size</sub></td>
@@ -100,7 +101,13 @@ Pick a file, pick one of **408 ready-made profiles**, and press **Convert**.
 
 ## 📥 Download
 
-Grab **`ReelForge.exe`** from the [**latest release**](https://github.com/zheerkhalid/reelforge/releases/latest). It is a single portable EXE with no installer and no runtimes.
+Get it from the [**latest release**](https://github.com/zheerkhalid/reelforge/releases/latest):
+
+| File | What it is |
+|---|---|
+| `ReelForge-Setup.exe` | Installer with Start Menu and desktop shortcuts and an uninstaller |
+| `ReelForge-x.y.z-portable-x64.zip` | Portable: unzip and run, nothing is installed |
+| `ReelForge.exe` | The bare EXE |
 
 ReelForge uses **[FFmpeg](https://ffmpeg.org)** as its conversion engine. FFmpeg is not bundled. Install it with one of these:
 
@@ -114,7 +121,7 @@ or put `ffmpeg.exe` and `ffprobe.exe` next to `ReelForge.exe` (in a `bin\` or `f
 
 | Category | Profiles | Category | Profiles |
 |---|---:|---|---:|
-| ⭐ Recommended | 11 | 🗄️ Lossless & Archive | 7 |
+| ⭐ Recommended | 12 | 🗄️ Lossless & Archive | 7 |
 | 🎬 Common Video | 40 | ⚡ Remux (no quality loss) | 12 |
 | 🎵 Common Audio | 43 | 👓 3D Video (side-by-side, anaglyph) | 21 |
 | 📺 HD & 4K / 8K | 65 | 💿 DVD, VCD & Blu-ray | 11 |
