@@ -1,10 +1,8 @@
-//! Text that egui can't draw on its own: Arabic-script names (Kurdish Sorani,
-//! Arabic, Persian…) and other scripts the built-in font lacks.
+//! Fonts for scripts the built-in egui font lacks (Arabic script, Indic, CJK).
 //!
-//! egui draws one glyph per character, left to right, without joining. So we
-//! (1) load system fonts that contain those letters, and (2) turn the letters
-//! into their joined presentation forms and put right-to-left runs in visual
-//! order before handing the text to egui.
+//! These are fallbacks for text egui draws itself (and for typing). Names and
+//! other user text with right-to-left letters are drawn by Windows instead:
+//! see `bidi.rs`.
 
 use eframe::egui;
 
@@ -22,11 +20,7 @@ pub fn install_fonts(ctx: &egui::Context) {
             ("malgun", "C:\\Windows\\Fonts\\malgun.ttf", 0),
         ]
     } else if cfg!(target_os = "macos") {
-        &[
-            ("geeza", "/System/Library/Fonts/GeezaPro.ttc", 0),
-            ("arial", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
-            ("pingfang", "/System/Library/Fonts/PingFang.ttc", 0),
-        ]
+        &[("geeza", "/System/Library/Fonts/GeezaPro.ttc", 0), ("arial", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0), ("pingfang", "/System/Library/Fonts/PingFang.ttc", 0)]
     } else {
         &[
             ("noto-arabic", "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf", 0),
@@ -48,40 +42,4 @@ pub fn install_fonts(ctx: &egui::Context) {
         }
     }
     ctx.set_fonts(fonts);
-}
-
-fn is_rtl_char(c: char) -> bool {
-    matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF)
-}
-
-/// Make a string display correctly: join Arabic-script letters and order
-/// right-to-left words. Text without such letters is returned unchanged.
-pub fn shape(s: &str) -> String {
-    if !s.chars().any(is_rtl_char) {
-        return s.to_string();
-    }
-    let joined = ar_reshaper::reshape_line(s);
-    let bidi = unicode_bidi::BidiInfo::new(&joined, Some(unicode_bidi::Level::ltr()));
-    let mut out = String::with_capacity(joined.len());
-    for para in &bidi.paragraphs {
-        let line = para.range.clone();
-        out.push_str(&bidi.reorder_line(para, line));
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn latin_untouched() {
-        assert_eq!(shape("Hello.mp4"), "Hello.mp4");
-    }
-    #[test]
-    fn kurdish_reordered() {
-        let s = shape("001 - باران.mp4");
-        assert!(s.starts_with("001 - "));
-        assert!(s.ends_with(".mp4"));
-        assert!(!s.contains('\u{0628}'), "letters should be in joined forms: {}", s);
-    }
 }

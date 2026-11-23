@@ -164,12 +164,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ar-reshaper"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08dae85b57b725df143d5a2eb92c032dd032f062a636826fda1e1a4b21c40c03"
-
-[[package]]
 name = "arboard"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2588,9 +2582,8 @@ dependencies = [
 
 [[package]]
 name = "reelforge"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
- "ar-reshaper",
  "dirs",
  "eframe",
  "embed-resource",
@@ -2599,7 +2592,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tiny-skia",
- "unicode-bidi",
+ "windows",
  "winit",
 ]
 
@@ -3272,12 +3265,6 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "unicode-bidi"
-version = "0.3.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
 name = "unicode-ident"

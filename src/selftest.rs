@@ -33,7 +33,7 @@ fn write_pgs(path: &Path) {
     let mut out = Vec::new();
     let on = 45_000u32; // 0.5 s at 90 kHz
     let off = 495_000u32; // 5.5 s
-    // Composition: epoch start, one object.
+                          // Composition: epoch start, one object.
     let mut pcs = Vec::new();
     pcs.extend_from_slice(&vw.to_be_bytes());
     pcs.extend_from_slice(&vh.to_be_bytes());
@@ -98,7 +98,8 @@ pub fn selftest(dir: PathBuf) {
     let info_b = engine::probe(&b);
     println!("probe a: ok={} {}x{} {:.2}s {} audio tracks", info_a.ok, info_a.width, info_a.height, info_a.duration, info_a.audio.len());
     let find = |n: &str| -> Profile { lib.iter().find(|p| p.name == n).unwrap_or_else(|| panic!("no profile {}", n)).clone() };
-    let input = |p: &Path, info: &engine::MediaInfo, edits: Edits| JobInput { path: p.to_path_buf(), info: info.clone(), edits, audio_track: 0, subtitle: SubChoice::None, forced_only: false, sub_size: 0 };
+    let input =
+        |p: &Path, info: &engine::MediaInfo, edits: Edits| JobInput { path: p.to_path_buf(), info: info.clone(), edits, audio_track: 0, subtitle: SubChoice::None, forced_only: false, sub_size: 0 };
     let edited = Edits { trim_start: 1.0, trim_end: 4.0, crop: [40, 20, 40, 20], watermark: "Sample: 1".into(), volume: 80.0, ..Default::default() };
 
     let mut cases: Vec<(String, JobSpec)> = Vec::new();

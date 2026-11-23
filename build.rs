@@ -34,10 +34,7 @@ fn render_icon(size: u32) -> Vec<u8> {
     paint.shader = LinearGradient::new(
         Point::from_xy(x0, y0),
         Point::from_xy(x1, y1),
-        vec![
-            GradientStop::new(0.0, Color::from_rgba8(0xff, 0x8a, 0x3d, 255)),
-            GradientStop::new(1.0, Color::from_rgba8(0xe0, 0x2f, 0x7a, 255)),
-        ],
+        vec![GradientStop::new(0.0, Color::from_rgba8(0xff, 0x8a, 0x3d, 255)), GradientStop::new(1.0, Color::from_rgba8(0xe0, 0x2f, 0x7a, 255))],
         SpreadMode::Pad,
         id,
     )
@@ -77,10 +74,7 @@ fn render_icon(size: u32) -> Vec<u8> {
     bolt.anti_alias = true;
     bolt.set_color_rgba8(0xff, 0xd2, 0x3f, 255);
     let mut b = PathBuilder::new();
-    for (i, (x, y)) in [(196.0, 120.0), (160.0, 182.0), (184.0, 182.0), (170.0, 232.0), (214.0, 162.0), (190.0, 162.0), (204.0, 120.0)]
-        .iter()
-        .enumerate()
-    {
+    for (i, (x, y)) in [(196.0, 120.0), (160.0, 182.0), (184.0, 182.0), (170.0, 232.0), (214.0, 162.0), (190.0, 162.0), (204.0, 120.0)].iter().enumerate() {
         if i == 0 {
             b.move_to(x * s, y * s)
         } else {

@@ -3,6 +3,13 @@
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
+; scripts\package.ps1 passes these two (the build may live outside .\target).
+#ifndef ExeFile
+  #define ExeFile "..\target\release\ReelForge.exe"
+#endif
+#ifndef IconFile
+  #define IconFile "..\target\reelforge.ico"
+#endif
 
 [Setup]
 AppId={{C8A4E1D7-2B36-4F9A-8E05-1A6B9D3C7F52}
@@ -18,11 +25,11 @@ DefaultGroupName=ReelForge
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-ArchitecturesAllowed=x64compatible 
-ArchitecturesInstallIn64BitMode=x64compatible 
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
 OutputBaseFilename=ReelForge-Setup
-SetupIconFile=..\target\reelforge.ico
+SetupIconFile={#IconFile}
 UninstallDisplayIcon={app}\ReelForge.exe
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -35,10 +42,10 @@ VersionInfoCompany=Zheer Khalid (zheer.dev)
 VersionInfoDescription=ReelForge Setup
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; 
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}";
 
 [Files]
-Source: "..\target\release\ReelForge.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeFile}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]

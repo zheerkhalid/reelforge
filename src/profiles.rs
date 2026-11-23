@@ -198,10 +198,7 @@ impl ACodec {
     }
 
     pub fn lossless(self) -> bool {
-        matches!(
-            self,
-            ACodec::Flac | ACodec::Alac | ACodec::Pcm16 | ACodec::Pcm24 | ACodec::Pcm16Be
-        )
+        matches!(self, ACodec::Flac | ACodec::Alac | ACodec::Pcm16 | ACodec::Pcm24 | ACodec::Pcm16Be)
     }
 }
 
@@ -216,13 +213,7 @@ pub enum Quality {
 }
 
 impl Quality {
-    pub const ALL: [Quality; 5] = [
-        Quality::Best,
-        Quality::High,
-        Quality::Medium,
-        Quality::Low,
-        Quality::Bitrate,
-    ];
+    pub const ALL: [Quality; 5] = [Quality::Best, Quality::High, Quality::Medium, Quality::Low, Quality::Bitrate];
     pub fn label(self) -> &'static str {
         match self {
             Quality::Best => "Best (bigger file)",
@@ -365,20 +356,7 @@ struct B {
 
 #[allow(clippy::too_many_arguments)]
 impl B {
-    fn add(
-        &mut self,
-        cat: &str,
-        name: &str,
-        ext: &str,
-        v: VCodec,
-        a: ACodec,
-        w: u32,
-        h: u32,
-        fps: f32,
-        q: Quality,
-        akbps: u32,
-        note: &str,
-    ) -> &mut Profile {
+    fn add(&mut self, cat: &str, name: &str, ext: &str, v: VCodec, a: ACodec, w: u32, h: u32, fps: f32, q: Quality, akbps: u32, note: &str) -> &mut Profile {
         self.next += 1;
         self.list.push(Profile {
             id: stable_id(cat, name),
@@ -436,7 +414,19 @@ pub fn library() -> Vec<Profile> {
     let r = "Recommended";
     b.add(r, "MP4 – works everywhere (H.264)", "mp4", V::H264, A::Aac, 0, 0, 0.0, High, 160, "Plays on phones, TVs, browsers and every computer. Keeps the original size.");
     b.add(r, "MP4 – HEVC / H.265: smaller file, same quality", "mp4", V::H265, A::Aac, 0, 0, 0.0, High, 160, "About half the size of H.264 at the same quality. Plays on recent devices.");
-    b.add(r, "MP4 – HEVC / H.265: very small file", "mp4", V::H265, A::Aac, 0, 0, 0.0, Medium, 128, "The smallest good-looking file. Keeps the original size; ideal for storing or sending long videos.");
+    b.add(
+        r,
+        "MP4 – HEVC / H.265: very small file",
+        "mp4",
+        V::H265,
+        A::Aac,
+        0,
+        0,
+        0.0,
+        Medium,
+        128,
+        "The smallest good-looking file. Keeps the original size; ideal for storing or sending long videos.",
+    );
     b.add(r, "MP4 – tiny file for sharing (720p)", "mp4", V::H264, A::Aac, 0, 720, 0.0, Low, 96, "Good for messaging apps and email.");
     b.add(r, "MKV – best quality archive (H.265 10-bit)", "mkv", V::H265, A::Flac, 0, 0, 0.0, Best, 0, "Near-lossless picture, lossless sound.").ten_bit = true;
     b.add(r, "AV1 – newest, smallest (MP4)", "mp4", V::Av1, A::Opus, 0, 0, 0.0, High, 128, "Best compression available. Needs a recent player.");
@@ -539,7 +529,9 @@ pub fn library() -> Vec<Profile> {
 
     // ---------------- Social & Web ----------------
     let w = "Social & Web";
-    for (name, height, fps, k) in [("YouTube 720p", 720u32, 0.0, 160u32), ("YouTube 1080p", 1080, 0.0, 192), ("YouTube 1440p", 1440, 0.0, 192), ("YouTube 4K", 2160, 0.0, 256), ("YouTube 1080p 60 fps", 1080, 60.0, 192)] {
+    for (name, height, fps, k) in
+        [("YouTube 720p", 720u32, 0.0, 160u32), ("YouTube 1080p", 1080, 0.0, 192), ("YouTube 1440p", 1440, 0.0, 192), ("YouTube 4K", 2160, 0.0, 256), ("YouTube 1080p 60 fps", 1080, 60.0, 192)]
+    {
         b.add(w, name, "mp4", V::H264, A::Aac, 0, height, fps, High, k, "Recommended upload settings.");
     }
     b.add(w, "YouTube 4K HEVC", "mp4", V::H265, A::Aac, 0, 2160, 0.0, High, 256, "").extra = s(&["-tag:v", "hvc1"]);
@@ -628,7 +620,13 @@ pub fn library() -> Vec<Profile> {
         ("Android – MKV 1080p", 0, 1080, V::H264, 160),
         ("Android – old devices (MPEG-4 480p)", 0, 480, V::Mpeg4, 128),
     ] {
-        let ext = if name.contains("WebM") { "webm" } else if name.contains("MKV") { "mkv" } else { "mp4" };
+        let ext = if name.contains("WebM") {
+            "webm"
+        } else if name.contains("MKV") {
+            "mkv"
+        } else {
+            "mp4"
+        };
         let acodec = if codec == V::Vp9 || codec == V::Av1 { A::Opus } else { A::Aac };
         b.add(an, name, ext, codec, acodec, wd, ht, 0.0, High, k, "");
     }
@@ -690,14 +688,17 @@ pub fn library() -> Vec<Profile> {
         let pix = if prof == "4" || prof == "5" { "yuva444p10le" } else { "yuv422p10le" };
         p.extra = s(&["-profile:v", prof, "-vendor", "apl0", "-pix_fmt", pix]);
     }
-    for (name, prof, pix) in [("DNxHR LB", "dnxhr_lb", "yuv422p"), ("DNxHR SQ", "dnxhr_sq", "yuv422p"), ("DNxHR HQ", "dnxhr_hq", "yuv422p"), ("DNxHR HQX 10-bit", "dnxhr_hqx", "yuv422p10le"), ("DNxHR 444", "dnxhr_444", "yuv444p10le")] {
+    for (name, prof, pix) in [
+        ("DNxHR LB", "dnxhr_lb", "yuv422p"),
+        ("DNxHR SQ", "dnxhr_sq", "yuv422p"),
+        ("DNxHR HQ", "dnxhr_hq", "yuv422p"),
+        ("DNxHR HQX 10-bit", "dnxhr_hqx", "yuv422p10le"),
+        ("DNxHR 444", "dnxhr_444", "yuv444p10le"),
+    ] {
         let p = b.add(e, &format!("Avid / Resolve – {} (MOV)", name), "mov", V::DnxHr, A::Pcm16, 0, 0, 0.0, Best, 0, "");
         p.extra = s(&["-profile:v", prof, "-pix_fmt", pix]);
     }
-    for (name, prof, pix) in [("DNxHR HQ", "dnxhr_hq", "yuv422p")] {
-        let p = b.add(e, &format!("Avid / Resolve – {} (MXF)", name), "mxf", V::DnxHr, A::Pcm16, 0, 0, 0.0, Best, 0, "");
-        p.extra = s(&["-profile:v", prof, "-pix_fmt", pix]);
-    }
+    b.add(e, "Avid / Resolve – DNxHR HQ (MXF)", "mxf", V::DnxHr, A::Pcm16, 0, 0, 0.0, Best, 0, "").extra = s(&["-profile:v", "dnxhr_hq", "-pix_fmt", "yuv422p"]);
     b.add(e, "Adobe Premiere / Sony Vegas – MPEG-2 (MPG)", "mpg", V::Mpeg2, A::Pcm16, 0, 0, 0.0, Best, 0, "");
     b.add(e, "Adobe Premiere / Sony Vegas – H.264 intra (MOV)", "mov", V::H264, A::Pcm16, 0, 0, 0.0, Best, 0, "All-keyframe H.264: smooth scrubbing.").extra = s(&["-g", "1"]);
     b.add(e, "Adobe Premiere – MP4 H.264 (edit friendly)", "mp4", V::H264, A::Aac, 0, 0, 0.0, Best, 320, "").extra = s(&["-g", "15", "-bf", "0"]);
@@ -718,7 +719,19 @@ pub fn library() -> Vec<Profile> {
     // ---------------- Remux ----------------
     let rm = "Remux (no quality loss)";
     for (ext, name) in [("mkv", "MKV"), ("mp4", "MP4"), ("mov", "MOV"), ("ts", "TS"), ("m2ts", "M2TS"), ("avi", "AVI"), ("webm", "WebM"), ("flv", "FLV")] {
-        b.add(rm, &format!("Copy all streams into {}", name), ext, V::Copy, A::Copy, 0, 0, 0.0, High, 0, "No re-encoding: instant, no quality loss. The streams must be supported by the new container.");
+        b.add(
+            rm,
+            &format!("Copy all streams into {}", name),
+            ext,
+            V::Copy,
+            A::Copy,
+            0,
+            0,
+            0.0,
+            High,
+            0,
+            "No re-encoding: instant, no quality loss. The streams must be supported by the new container.",
+        );
     }
     b.add(rm, "Keep video, convert sound to AAC – MP4", "mp4", V::Copy, A::Aac, 0, 0, 0.0, High, 192, "Fixes 'no sound' on TVs that can't play DTS/AC-3.");
     b.add(rm, "Keep video, convert sound to AC-3 – MKV", "mkv", V::Copy, A::Ac3, 0, 0, 0.0, High, 448, "");
@@ -727,7 +740,13 @@ pub fn library() -> Vec<Profile> {
 
     // ---------------- 3D ----------------
     let d = "3D Video";
-    for (mode, mname) in [(Stereo::AnaglyphFromSbs, "Anaglyph red/cyan (from side-by-side)"), (Stereo::AnaglyphFromTb, "Anaglyph red/cyan (from top-bottom)"), (Stereo::SbsToTb, "Top-bottom (from side-by-side)"), (Stereo::TbToSbs, "Side-by-side (from top-bottom)"), (Stereo::SbsHalf, "Half side-by-side (from full SBS)")] {
+    for (mode, mname) in [
+        (Stereo::AnaglyphFromSbs, "Anaglyph red/cyan (from side-by-side)"),
+        (Stereo::AnaglyphFromTb, "Anaglyph red/cyan (from top-bottom)"),
+        (Stereo::SbsToTb, "Top-bottom (from side-by-side)"),
+        (Stereo::TbToSbs, "Side-by-side (from top-bottom)"),
+        (Stereo::SbsHalf, "Half side-by-side (from full SBS)"),
+    ] {
         for (ext, ename) in [("mp4", "MP4"), ("mkv", "MKV"), ("m2ts", "M2TS")] {
             let p = b.add(d, &format!("3D {} – {}", mname, ename), ext, V::H264, A::Aac, 0, 0, 0.0, High, 192, "For 3D TVs, VR headsets and red/cyan glasses.");
             p.stereo = mode;
@@ -736,7 +755,9 @@ pub fn library() -> Vec<Profile> {
 
     // ---------------- DVD / VCD / Blu-ray ----------------
     let dv = "DVD, VCD & Blu-ray";
-    for (name, target) in [("DVD video – NTSC", "ntsc-dvd"), ("DVD video – PAL", "pal-dvd"), ("VCD – NTSC", "ntsc-vcd"), ("VCD – PAL", "pal-vcd"), ("SVCD – NTSC", "ntsc-svcd"), ("SVCD – PAL", "pal-svcd")] {
+    for (name, target) in
+        [("DVD video – NTSC", "ntsc-dvd"), ("DVD video – PAL", "pal-dvd"), ("VCD – NTSC", "ntsc-vcd"), ("VCD – PAL", "pal-vcd"), ("SVCD – NTSC", "ntsc-svcd"), ("SVCD – PAL", "pal-svcd")]
+    {
         let p = b.add(dv, name, "mpg", V::Mpeg2, A::Ac3, 0, 0, 0.0, High, 0, "Ready to burn with any disc authoring tool.");
         p.extra = s(&["-target", target]);
         p.channels = 0;
@@ -938,4 +959,44 @@ fn s(v: &[&str]) -> Vec<String> {
 
 pub fn category_icon(cat: &str) -> &'static str {
     CATEGORIES.iter().find(|(c, _)| *c == cat).map(|(_, i)| *i).unwrap_or("•")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn the_library_is_complete_and_consistent() {
+        let lib = library();
+        assert_eq!(lib.len(), 409);
+        let ids: HashSet<u32> = lib.iter().map(|p| p.id).collect();
+        assert_eq!(ids.len(), lib.len(), "profile ids must be unique");
+        let names: HashSet<(&str, &str)> = lib.iter().map(|p| (p.category.as_str(), p.name.as_str())).collect();
+        assert_eq!(names.len(), lib.len(), "no two profiles of a category share a name");
+        for p in &lib {
+            assert!(CATEGORIES.iter().any(|(c, _)| *c == p.category), "unknown category {}", p.category);
+            assert!(!p.ext.is_empty() && !p.name.is_empty());
+            assert!(p.vcodec != VCodec::None || p.acodec != ACodec::None, "{} makes nothing", p.name);
+            assert!(!p.custom);
+        }
+        // Every category except "My Profiles" has something in it.
+        for (c, _) in CATEGORIES.iter().filter(|(c, _)| *c != "My Profiles") {
+            assert!(lib.iter().any(|p| p.category == *c), "empty category {c}");
+        }
+    }
+
+    #[test]
+    fn summaries_and_numbers_read_well() {
+        assert_eq!(trim_float(29.97), "29.97");
+        assert_eq!(trim_float(30.0), "30");
+        assert_eq!(trim_float(23.976), "23.976");
+        let lib = library();
+        let p = lib.iter().find(|p| p.name == "MP4 – tiny file for sharing (720p)").unwrap();
+        assert_eq!(p.summary(), "H.264 / AVC · 720p  |  AAC 96 kbps");
+        let remux = lib.iter().find(|p| p.name == "Change container only (instant)").unwrap();
+        assert!(remux.is_remux() && !remux.is_audio_only());
+        let mp3 = lib.iter().find(|p| p.name == "MP3 – music (320 kbps)").unwrap();
+        assert!(mp3.is_audio_only());
+    }
 }

@@ -4,10 +4,11 @@
 use crate::gpu::{HwEncoder, Vendor};
 use crate::profiles::{ACodec, Fit, Profile, Quality, Stereo, VCodec};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -97,7 +98,7 @@ impl Track {
         if !self.title.is_empty() {
             s.push_str(&format!(" – {}", self.title));
         }
-        crate::text::shape(&s)
+        s
     }
 }
 
@@ -162,10 +163,7 @@ pub fn probe(path: &Path) -> MediaInfo {
         info.error = "FFprobe not found".into();
         return info;
     };
-    let out = hidden_command(fp)
-        .args(["-v", "error", "-show_format", "-show_streams", "-of", "json"])
-        .arg(path)
-        .output();
+    let out = hidden_command(fp).args(["-v", "error", "-show_format", "-show_streams", "-of", "json"]).arg(path).output();
     let Ok(out) = out else {
         info.error = "Could not run FFprobe".into();
         return info;
@@ -323,10 +321,7 @@ impl Edits {
             _ => ("w-tw-24", "h-th-24"),
         };
         let font = if cfg!(windows) { ":fontfile='C\\:/Windows/Fonts/arial.ttf'" } else { "" };
-        Some(format!(
-            "drawtext=text='{}'{}:fontsize={}:fontcolor=white@0.85:shadowcolor=black@0.6:shadowx=2:shadowy=2:x={}:y={}",
-            text, font, self.watermark_size, x, y
-        ))
+        Some(format!("drawtext=text='{}'{}:fontsize={}:fontcolor=white@0.85:shadowcolor=black@0.6:shadowx=2:shadowy=2:x={}:y={}", text, font, self.watermark_size, x, y))
     }
 }
 
@@ -421,9 +416,7 @@ fn scale_filters(p: &Profile) -> Vec<String> {
                 vec![format!("scale={}:-2:flags=lanczos", w)]
             }
         }
-        Fit::Pad => vec![format!(
-            "scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
-        )],
+        Fit::Pad => vec![format!("scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")],
         Fit::Fill => vec![format!("scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h},setsar=1")],
     }
 }
@@ -496,14 +489,19 @@ pub fn text_subtitle_filters(path: &Path, sub: &SubChoice, subs: &[Track], shift
     }
 }
 
-fn parse_clock(s: &str) -> Option<f64> {
-    // "HH:MM:SS,mmm", "HH:MM:SS.mmm", "H:MM:SS.cc" or "MM:SS.mmm"
+/// A typed or written time: "HH:MM:SS,mmm", "HH:MM:SS.mmm", "H:MM:SS.cc",
+/// "MM:SS.mmm" or plain seconds ("90", "12.5").
+pub fn parse_clock(s: &str) -> Option<f64> {
     let s = s.trim().replace(',', ".");
     let parts: Vec<&str> = s.split(':').collect();
     let nums: Vec<f64> = parts.iter().map(|p| p.trim().parse::<f64>()).collect::<Result<_, _>>().ok()?;
+    if nums.iter().any(|n| !n.is_finite() || *n < 0.0) {
+        return None;
+    }
     match nums.as_slice() {
         [h, m, sec] => Some(h * 3600.0 + m * 60.0 + sec),
         [m, sec] => Some(m * 60.0 + sec),
+        [sec] => Some(*sec),
         _ => None,
     }
 }
@@ -572,7 +570,19 @@ fn video_chain(inp: &JobInput, p: &Profile, for_merge: bool) -> Vec<String> {
 fn needs_yuv420(v: VCodec) -> bool {
     matches!(
         v,
-        VCodec::H264 | VCodec::H265 | VCodec::Av1 | VCodec::Vp9 | VCodec::Vp8 | VCodec::Mpeg4 | VCodec::Xvid | VCodec::Mpeg2 | VCodec::Mpeg1 | VCodec::Wmv2 | VCodec::H263 | VCodec::Theora | VCodec::Flv1
+        VCodec::H264
+            | VCodec::H265
+            | VCodec::Av1
+            | VCodec::Vp9
+            | VCodec::Vp8
+            | VCodec::Mpeg4
+            | VCodec::Xvid
+            | VCodec::Mpeg2
+            | VCodec::Mpeg1
+            | VCodec::Wmv2
+            | VCodec::H263
+            | VCodec::Theora
+            | VCodec::Flv1
     )
 }
 
@@ -637,15 +647,53 @@ fn video_codec_args(p: &Profile, hw: Option<&HwEncoder>, src_h: u32, threads: u3
         push(&mut a, &["-c:v", enc]);
         match p.vcodec {
             VCodec::H264 => {
-                push(&mut a, &["-preset", match q { Quality::Best => "slow", Quality::High => "medium", _ => "faster" }]);
-                if bitrate > 0 { rate_args(&mut a) } else { push(&mut a, &["-crf", &qi([17, 20, 23, 28])]) }
+                push(
+                    &mut a,
+                    &[
+                        "-preset",
+                        match q {
+                            Quality::Best => "slow",
+                            Quality::High => "medium",
+                            _ => "faster",
+                        },
+                    ],
+                );
+                if bitrate > 0 {
+                    rate_args(&mut a)
+                } else {
+                    push(&mut a, &["-crf", &qi([17, 20, 23, 28])])
+                }
             }
             VCodec::H265 => {
-                push(&mut a, &["-preset", match q { Quality::Best => "slow", Quality::High => "medium", _ => "fast" }]);
-                if bitrate > 0 { rate_args(&mut a) } else { push(&mut a, &["-crf", &qi([18, 22, 26, 30])]) }
+                push(
+                    &mut a,
+                    &[
+                        "-preset",
+                        match q {
+                            Quality::Best => "slow",
+                            Quality::High => "medium",
+                            _ => "fast",
+                        },
+                    ],
+                );
+                if bitrate > 0 {
+                    rate_args(&mut a)
+                } else {
+                    push(&mut a, &["-crf", &qi([18, 22, 26, 30])])
+                }
             }
             VCodec::Av1 => {
-                push(&mut a, &["-preset", match q { Quality::Best => "4", Quality::High => "6", _ => "8" }]);
+                push(
+                    &mut a,
+                    &[
+                        "-preset",
+                        match q {
+                            Quality::Best => "4",
+                            Quality::High => "6",
+                            _ => "8",
+                        },
+                    ],
+                );
                 // SVT-AV1 takes a plain target bitrate (a ceiling only works with CRF).
                 if bitrate > 0 {
                     a.extend(["-b:v".into(), format!("{}k", bitrate)]);
@@ -654,18 +702,44 @@ fn video_codec_args(p: &Profile, hw: Option<&HwEncoder>, src_h: u32, threads: u3
                 }
             }
             VCodec::Vp9 => {
-                push(&mut a, &["-row-mt", "1", "-deadline", "good", "-cpu-used", match q { Quality::Best => "1", Quality::High => "2", _ => "4" }]);
-                if bitrate > 0 { rate_args(&mut a) } else { push(&mut a, &["-crf", &qi([24, 31, 36, 42]), "-b:v", "0"]) }
+                push(
+                    &mut a,
+                    &[
+                        "-row-mt",
+                        "1",
+                        "-deadline",
+                        "good",
+                        "-cpu-used",
+                        match q {
+                            Quality::Best => "1",
+                            Quality::High => "2",
+                            _ => "4",
+                        },
+                    ],
+                );
+                if bitrate > 0 {
+                    rate_args(&mut a)
+                } else {
+                    push(&mut a, &["-crf", &qi([24, 31, 36, 42]), "-b:v", "0"])
+                }
             }
             VCodec::Vp8 | VCodec::Wmv2 => {
                 let k = if bitrate > 0 { bitrate } else { estimate_kbps(src_h, q) };
                 a.extend(["-b:v".into(), format!("{}k", k)]);
             }
             VCodec::Theora => {
-                if bitrate > 0 { rate_args(&mut a) } else { push(&mut a, &["-q:v", &qi([9, 7, 5, 3])]) }
+                if bitrate > 0 {
+                    rate_args(&mut a)
+                } else {
+                    push(&mut a, &["-q:v", &qi([9, 7, 5, 3])])
+                }
             }
             VCodec::Mpeg4 | VCodec::Xvid | VCodec::Mpeg2 | VCodec::Mpeg1 | VCodec::H263 | VCodec::Flv1 | VCodec::Mjpeg => {
-                if bitrate > 0 { rate_args(&mut a) } else { push(&mut a, &["-q:v", &qi([2, 3, 5, 8])]) }
+                if bitrate > 0 {
+                    rate_args(&mut a)
+                } else {
+                    push(&mut a, &["-q:v", &qi([2, 3, 5, 8])])
+                }
             }
             _ => {}
         }
@@ -754,9 +828,9 @@ pub fn build_args(spec: &JobSpec, use_gpu: bool, concat_list: Option<&Path>) -> 
     };
 
     let merging = spec.inputs.len() > 1;
-    if merging && concat_list.is_some() {
+    if let (true, Some(list)) = (merging, concat_list) {
         // Stream copy merge through the concat demuxer.
-        a.extend([s("-f"), s("concat"), s("-safe"), s("0"), s("-i"), concat_list.unwrap().to_string_lossy().to_string()]);
+        a.extend([s("-f"), s("concat"), s("-safe"), s("0"), s("-i"), list.to_string_lossy().to_string()]);
         a.extend([s("-map"), s("0:v?"), s("-map"), s("0:a?"), s("-c"), s("copy")]);
     } else if merging {
         for inp in &spec.inputs {
@@ -771,7 +845,13 @@ pub fn build_args(spec: &JobSpec, use_gpu: bool, concat_list: Option<&Path>) -> 
         } else {
             (first.info.width.max(2) & !1, first.info.height.max(2) & !1)
         };
-        let fps = if p.fps > 0.0 { p.fps } else if first.info.fps > 0.0 { first.info.fps } else { 30.0 };
+        let fps = if p.fps > 0.0 {
+            p.fps
+        } else if first.info.fps > 0.0 {
+            first.info.fps
+        } else {
+            30.0
+        };
         let mut graph = Vec::new();
         let mut concat_in = String::new();
         for (i, inp) in spec.inputs.iter().enumerate() {
@@ -781,10 +861,7 @@ pub fn build_args(spec: &JobSpec, use_gpu: bool, concat_list: Option<&Path>) -> 
                 if let Some(w) = inp.edits.watermark_filter() {
                     chain.push(w);
                 }
-                chain.push(format!(
-                    "scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={},format=yuv420p",
-                    crate::profiles::trim_float(fps)
-                ));
+                chain.push(format!("scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={},format=yuv420p", crate::profiles::trim_float(fps)));
                 if let (true, Some(k)) = (inp.info.has_video, is_picture_sub(inp)) {
                     graph.push(format!("[{i}:v:0][{i}:s:{k}]overlay=x=(W-w)/2:y=H-h:eof_action=pass:format=auto,{}[v{i}]", chain.join(",")));
                 } else if inp.info.has_video {
@@ -855,53 +932,49 @@ pub fn build_args(spec: &JobSpec, use_gpu: bool, concat_list: Option<&Path>) -> 
                 a.push(s("-an"));
             }
         } else {
-        // Picture subtitles are drawn with an overlay, which needs a filter graph.
-        let pic_sub = if video_out && p.vcodec != VCodec::Copy { is_picture_sub(first) } else { None };
-        if video_out && pic_sub.is_none() {
-            a.extend([s("-map"), s("0:v:0")]);
-        }
-        if audio_out {
-            let t = first.audio_track.min(first.info.audio.len().saturating_sub(1));
-            a.extend([s("-map"), format!("0:a:{}", t)]);
-        }
-        if video_out {
-            if p.vcodec == VCodec::Copy {
-                a.extend([s("-c:v"), s("copy")]);
-            } else {
-                let vf = video_chain(first, p, false);
-                if let Some(k) = pic_sub {
-                    let mut g = picture_sub_overlay(k);
-                    if !vf.is_empty() {
-                        g.push(',');
-                        g.push_str(&vf.join(","));
-                    }
-                    g.push_str("[vout]");
-                    a.extend([s("-filter_complex"), g, s("-map"), s("[vout]")]);
-                } else if !vf.is_empty() {
-                    a.extend([s("-vf"), vf.join(",")]);
-                }
-                let target = if has_target(p) {
-                    None
+            // Picture subtitles are drawn with an overlay, which needs a filter graph.
+            let pic_sub = if video_out && p.vcodec != VCodec::Copy { is_picture_sub(first) } else { None };
+            if video_out && pic_sub.is_none() {
+                a.extend([s("-map"), s("0:v:0")]);
+            }
+            if audio_out {
+                let t = first.audio_track.min(first.info.audio.len().saturating_sub(1));
+                a.extend([s("-map"), format!("0:a:{}", t)]);
+            }
+            if video_out {
+                if p.vcodec == VCodec::Copy {
+                    a.extend([s("-c:v"), s("copy")]);
                 } else {
-                    target_video_kbps(p, &first.info, &first.edits).map(|k| k.round() as u32)
-                };
-                a.extend(video_codec_args(p, hw, src_h, spec.threads, target));
-            }
-        } else {
-            a.push(s("-vn"));
-        }
-        if audio_out {
-            if p.acodec != ACodec::Copy {
-                let af = audio_filters(&first.edits);
-                if !af.is_empty() {
-                    a.extend([s("-af"), af.join(",")]);
+                    let vf = video_chain(first, p, false);
+                    if let Some(k) = pic_sub {
+                        let mut g = picture_sub_overlay(k);
+                        if !vf.is_empty() {
+                            g.push(',');
+                            g.push_str(&vf.join(","));
+                        }
+                        g.push_str("[vout]");
+                        a.extend([s("-filter_complex"), g, s("-map"), s("[vout]")]);
+                    } else if !vf.is_empty() {
+                        a.extend([s("-vf"), vf.join(",")]);
+                    }
+                    let target = if has_target(p) { None } else { target_video_kbps(p, &first.info, &first.edits).map(|k| k.round() as u32) };
+                    a.extend(video_codec_args(p, hw, src_h, spec.threads, target));
                 }
+            } else {
+                a.push(s("-vn"));
             }
-            a.extend(audio_codec_args(p));
-        } else {
-            a.push(s("-an"));
-        }
-        a.push(s("-sn"));
+            if audio_out {
+                if p.acodec != ACodec::Copy {
+                    let af = audio_filters(&first.edits);
+                    if !af.is_empty() {
+                        a.extend([s("-af"), af.join(",")]);
+                    }
+                }
+                a.extend(audio_codec_args(p));
+            } else {
+                a.push(s("-an"));
+            }
+            a.push(s("-sn"));
         }
         a.extend([s("-map_metadata"), s("0")]);
     }
@@ -974,14 +1047,7 @@ impl JobHandle {
     }
 }
 
-fn run_once(
-    spec: &JobSpec,
-    use_gpu: bool,
-    state: &Arc<Mutex<JobState>>,
-    child_slot: &Arc<Mutex<Option<Child>>>,
-    cancel: &Arc<AtomicBool>,
-    ctx: &eframe::egui::Context,
-) -> bool {
+fn run_once(spec: &JobSpec, use_gpu: bool, state: &Arc<Mutex<JobState>>, child_slot: &Arc<Mutex<Option<Child>>>, cancel: &Arc<AtomicBool>, ctx: &eframe::egui::Context) -> bool {
     let Some(ff) = ffmpeg_path() else {
         state.lock().unwrap().error = "FFmpeg was not found. Put ffmpeg.exe next to this program or install it.".into();
         return false;
@@ -989,7 +1055,8 @@ fn run_once(
     // Stream-copy merging needs a list file.
     let mut list_file = None;
     if spec.inputs.len() > 1 && spec.profile.vcodec == VCodec::Copy {
-        let path = std::env::temp_dir().join(format!("reelforge_concat_{}.txt", std::process::id() as u64 * 1000 + (Instant::now().elapsed().as_nanos() % 1000) as u64));
+        static LIST_NO: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!("reelforge_concat_{}_{}.txt", std::process::id(), LIST_NO.fetch_add(1, Ordering::SeqCst)));
         let body: String = spec.inputs.iter().map(|i| format!("file '{}'\n", i.path.to_string_lossy().replace('\'', "'\\''"))).collect();
         if std::fs::write(&path, body).is_ok() {
             list_file = Some(path);
@@ -1003,7 +1070,9 @@ fn run_once(
         st.log.push(c);
         st.engine = if use_gpu {
             match (&spec.hw_encoder, spec.hw_decode) {
-                (Some(e), _) if spec.profile.vcodec.gpu_capable() => format!("GPU: {}", e.vendor.short()),
+                (Some(e), _) if spec.profile.vcodec.gpu_capable() => {
+                    format!("GPU: {}", e.vendor.short())
+                }
                 (_, Some(v)) => format!("GPU decode ({}), CPU encode", v.short()),
                 _ => "CPU".into(),
             }
@@ -1097,6 +1166,8 @@ pub fn start_job(spec: JobSpec, ctx: eframe::egui::Context) -> JobHandle {
     let (st, ch, ca) = (state.clone(), child.clone(), cancel.clone());
     std::thread::spawn(move || {
         let t0 = Instant::now();
+        // A file that was already there belongs to the user: never delete it.
+        let existed_before = spec.output.exists();
         let gpu_wanted = spec.hw_encoder.is_some() || spec.hw_decode.is_some();
         let mut ok = run_once(&spec, gpu_wanted, &st, &ch, &ca, &ctx);
         if !ok && gpu_wanted && !ca.load(Ordering::SeqCst) {
@@ -1122,11 +1193,86 @@ pub fn start_job(spec: JobSpec, ctx: eframe::egui::Context) -> JobHandle {
                     s.out_bytes = m.len();
                 }
             }
+        } else if should_remove_partial(existed_before, spec.split_minutes) {
+            // A stopped or failed conversion leaves a broken, half-written file.
+            let _ = std::fs::remove_file(&spec.output);
         }
         drop(s);
         ctx.request_repaint();
     });
     JobHandle { state, child, cancel }
+}
+
+/// Whether the half-written output of a failed or cancelled job is deleted:
+/// only a file this job created itself, and not the parts of a split.
+pub fn should_remove_partial(existed_before: bool, split_minutes: f64) -> bool {
+    !existed_before && split_minutes <= 0.0
+}
+
+// ---------------------------------------------------------------- probing queue
+
+/// Most files read (probed) at the same time. Adding a folder with hundreds of
+/// files would otherwise start hundreds of FFprobe processes at once.
+pub const PROBE_WORKERS: usize = 4;
+
+#[derive(Default)]
+struct PoolState {
+    queue: VecDeque<(u64, PathBuf)>,
+    workers: usize,
+}
+
+/// Reads media details in the background, a few files at a time, in the
+/// order they were added. Results land in `inbox`.
+#[derive(Clone, Default)]
+pub struct ProbePool {
+    state: Arc<Mutex<PoolState>>,
+    pub inbox: Arc<Mutex<Vec<(u64, MediaInfo)>>>,
+}
+
+impl ProbePool {
+    pub fn submit(&self, id: u64, path: PathBuf, ctx: &eframe::egui::Context) {
+        let ctx = ctx.clone();
+        self.submit_with(id, path, probe, move || ctx.request_repaint());
+    }
+
+    /// `work` reads one file; `wake` is called after each result.
+    pub fn submit_with<W, K>(&self, id: u64, path: PathBuf, work: W, wake: K)
+    where
+        W: Fn(&Path) -> MediaInfo + Send + 'static,
+        K: Fn() + Send + 'static,
+    {
+        let mut st = self.state.lock().unwrap();
+        st.queue.push_back((id, path));
+        if st.workers >= PROBE_WORKERS {
+            return;
+        }
+        st.workers += 1;
+        drop(st);
+        let (state, inbox) = (self.state.clone(), self.inbox.clone());
+        std::thread::spawn(move || loop {
+            let next = {
+                let mut st = state.lock().unwrap();
+                let next = st.queue.pop_front();
+                if next.is_none() {
+                    // Leaving is decided under the lock, so a file queued right
+                    // now either finds this worker or starts a new one.
+                    st.workers -= 1;
+                }
+                next
+            };
+            let Some((id, path)) = next else { break };
+            let info = work(&path);
+            inbox.lock().unwrap().push((id, info));
+            wake();
+        });
+    }
+
+    /// Files still waiting or being read.
+    #[cfg(test)]
+    fn busy(&self) -> bool {
+        let st = self.state.lock().unwrap();
+        st.workers > 0 || !st.queue.is_empty()
+    }
 }
 
 // ---------------------------------------------------------------- frames
@@ -1142,7 +1288,7 @@ pub fn grab_frame(path: &Path, t: f64, width: u32, filters: &[String]) -> Option
     if let Some(k) = pic_sub {
         // A picture subtitle may have started a little earlier: read from
         // 15 s before so the one on screen at `t` is decoded too.
-        let lead = t.min(15.0).max(0.0);
+        let lead = t.clamp(0.0, 15.0);
         cmd.args(["-ss", &format!("{:.3}", (t - lead).max(0.0)), "-i"]).arg(path);
         let graph = format!("{},{}[v]", picture_sub_overlay(k), vf.join(","));
         cmd.args(["-filter_complex", &graph, "-map", "[v]", "-ss", &format!("{:.3}", lead)]);
@@ -1179,6 +1325,18 @@ pub fn fmt_time(secs: f64) -> String {
         format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
     } else {
         format!("{:02}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// Like [`fmt_time`], with tenths of a second when the time is not whole
+/// ("01:30.5"), for the trim boxes.
+pub fn fmt_clock(secs: f64) -> String {
+    let tenths = (secs.max(0.0) * 10.0).round() as u64;
+    let whole = fmt_time((tenths / 10) as f64);
+    if tenths.is_multiple_of(10) {
+        whole
+    } else {
+        format!("{}.{}", whole, tenths % 10)
     }
 }
 
@@ -1271,7 +1429,13 @@ pub fn target_video_kbps(p: &Profile, info: &MediaInfo, e: &Edits) -> Option<f64
         return Some(0.0);
     }
     let (w, h) = out_dims(p, info, e);
-    let fps = if p.fps > 0.0 { p.fps as f64 } else if info.fps > 0.0 { info.fps as f64 } else { 30.0 };
+    let fps = if p.fps > 0.0 {
+        p.fps as f64
+    } else if info.fps > 0.0 {
+        info.fps as f64
+    } else {
+        30.0
+    };
     let src_fps = if info.fps > 0.0 { info.fps as f64 } else { fps };
     match p.vcodec {
         VCodec::None => Some(0.0),
@@ -1279,12 +1443,24 @@ pub fn target_video_kbps(p: &Profile, info: &MediaInfo, e: &Edits) -> Option<f64
         VCodec::ProRes => {
             // Apple's published 1080p30 rates (Mbps), scaled by pixels and frame rate.
             let prof = p.extra.iter().position(|x| x == "-profile:v").and_then(|i| p.extra.get(i + 1)).map(|s| s.as_str()).unwrap_or("2");
-            let base = match prof { "0" => 45.0, "1" => 102.0, "3" => 220.0, "4" => 330.0, "5" => 500.0, _ => 147.0 };
+            let base = match prof {
+                "0" => 45.0,
+                "1" => 102.0,
+                "3" => 220.0,
+                "4" => 330.0,
+                "5" => 500.0,
+                _ => 147.0,
+            };
             Some(base * 1000.0 * (w as f64 * h as f64) / (1920.0 * 1080.0) * fps / 30.0)
         }
         VCodec::DnxHr => {
             let prof = p.extra.iter().position(|x| x == "-profile:v").and_then(|i| p.extra.get(i + 1)).map(|s| s.as_str()).unwrap_or("dnxhr_hq");
-            let base = match prof { "dnxhr_lb" => 45.0, "dnxhr_sq" => 145.0, "dnxhr_hqx" | "dnxhr_444" => 440.0, _ => 220.0 };
+            let base = match prof {
+                "dnxhr_lb" => 45.0,
+                "dnxhr_sq" => 145.0,
+                "dnxhr_hqx" | "dnxhr_444" => 440.0,
+                _ => 220.0,
+            };
             Some(base * 1000.0 * (w as f64 * h as f64) / (1920.0 * 1080.0) * fps / 30.0)
         }
         VCodec::Ffv1 | VCodec::Huffyuv | VCodec::Gif | VCodec::Mjpeg => None,
@@ -1307,7 +1483,7 @@ pub fn target_video_kbps(p: &Profile, info: &MediaInfo, e: &Edits) -> Option<f64
                     Quality::Medium => 0.65,
                     _ => 0.42,
                 };
-                let from_src = src * pixels.min(1.0).max(0.05) * (fps / src_fps).min(2.0) * codec_weight(v) / codec_weight_name(&info.vcodec) * q;
+                let from_src = src * pixels.clamp(0.05, 1.0) * (fps / src_fps).min(2.0) * codec_weight(v) / codec_weight_name(&info.vcodec) * q;
                 Some(generic.min(from_src.max(generic * 0.25)))
             } else {
                 Some(generic)
@@ -1320,11 +1496,23 @@ pub fn target_video_kbps(p: &Profile, info: &MediaInfo, e: &Edits) -> Option<f64
 pub fn target_audio_kbps(p: &Profile, info: &MediaInfo, track: usize) -> f64 {
     let src = info.audio.get(track).or_else(|| info.audio.first());
     let Some(src) = src else { return 0.0 };
-    let rate = if p.sample_rate > 0 { p.sample_rate } else if src.sample_rate > 0 { src.sample_rate } else { 48000 } as f64;
+    let rate = if p.sample_rate > 0 {
+        p.sample_rate
+    } else if src.sample_rate > 0 {
+        src.sample_rate
+    } else {
+        48000
+    } as f64;
     let ch = if p.channels > 0 { p.channels as u32 } else { src.channels.max(1) } as f64;
     match p.acodec {
         ACodec::None => 0.0,
-        ACodec::Copy => if src.bitrate > 0 { src.bitrate as f64 / 1000.0 } else { 192.0 },
+        ACodec::Copy => {
+            if src.bitrate > 0 {
+                src.bitrate as f64 / 1000.0
+            } else {
+                192.0
+            }
+        }
         ACodec::Pcm16 | ACodec::Pcm16Be => rate * ch * 16.0 / 1000.0,
         ACodec::Pcm24 => rate * ch * 24.0 / 1000.0,
         ACodec::Flac | ACodec::Alac => rate * ch * 16.0 / 1000.0 * 0.6,
@@ -1345,4 +1533,364 @@ pub fn estimate_output(p: &Profile, info: &MediaInfo, e: &Edits, track: usize) -
     let a = target_audio_kbps(p, info, track);
     // ~2% container overhead.
     Some(((v + a) * 1000.0 / 8.0 * dur * 1.02) as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profiles;
+
+    fn profile(name: &str) -> Profile {
+        profiles::library().into_iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no profile {name}"))
+    }
+
+    fn video_info() -> MediaInfo {
+        MediaInfo {
+            ok: true,
+            duration: 60.0,
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            vcodec: "h264".into(),
+            acodec: "aac".into(),
+            has_video: true,
+            audio: vec![Track { codec: "aac".into(), channels: 2, sample_rate: 48000, bitrate: 128_000, ..Default::default() }],
+            size: 30_000_000,
+            bitrate: 4_000_000,
+            ..Default::default()
+        }
+    }
+
+    fn input(path: &str) -> JobInput {
+        JobInput { path: PathBuf::from(path), info: video_info(), edits: Edits::default(), audio_track: 0, subtitle: SubChoice::None, forced_only: false, sub_size: 0 }
+    }
+
+    fn spec(profile_name: &str, inputs: Vec<JobInput>, out: &str) -> JobSpec {
+        JobSpec { inputs, profile: profile(profile_name), output: PathBuf::from(out), hw_encoder: None, hw_decode: None, threads: 0, split_minutes: 0.0 }
+    }
+
+    fn pos(args: &[String], what: &str) -> usize {
+        args.iter().position(|a| a == what).unwrap_or_else(|| panic!("{what} missing in {args:?}"))
+    }
+
+    fn after<'a>(args: &'a [String], what: &str) -> &'a str {
+        &args[pos(args, what) + 1]
+    }
+
+    #[test]
+    fn typed_times_are_understood() {
+        assert_eq!(parse_clock("90"), Some(90.0));
+        assert_eq!(parse_clock("1:30"), Some(90.0));
+        assert_eq!(parse_clock("01:02:03"), Some(3723.0));
+        assert_eq!(parse_clock("00:00:01,500"), Some(1.5));
+        assert_eq!(parse_clock(" 2:05.5 "), Some(125.5));
+        assert_eq!(parse_clock("abc"), None);
+        assert_eq!(parse_clock("1:2:3:4"), None);
+        assert_eq!(parse_clock("-5"), None);
+        assert_eq!(parse_clock(""), None);
+    }
+
+    #[test]
+    fn clock_shows_tenths_only_when_needed() {
+        assert_eq!(fmt_clock(90.0), "01:30");
+        assert_eq!(fmt_clock(90.5), "01:30.5");
+        assert_eq!(fmt_clock(3723.25), "1:02:03.3");
+        assert_eq!(fmt_clock(-4.0), "00:00");
+        // What is shown can be typed back.
+        assert_eq!(parse_clock(&fmt_clock(125.5)), Some(125.5));
+    }
+
+    #[test]
+    fn sizes_and_times_read_well() {
+        assert_eq!(fmt_time(59.9), "00:59");
+        assert_eq!(fmt_time(3600.0), "1:00:00");
+        assert_eq!(fmt_bytes(512), "512 B");
+        assert_eq!(fmt_bytes(1536), "2 KB");
+        assert_eq!(fmt_bytes(5 * 1024 * 1024), "5.0 MB");
+        assert_eq!(fmt_bytes(3 * 1024 * 1024 * 1024), "3.00 GB");
+    }
+
+    #[test]
+    fn only_files_the_job_created_are_cleaned_up() {
+        assert!(should_remove_partial(false, 0.0));
+        assert!(!should_remove_partial(true, 0.0), "a file that was there before must be kept");
+        assert!(!should_remove_partial(false, 10.0), "split parts are left alone");
+    }
+
+    #[test]
+    fn plain_conversion_command() {
+        let s = spec("MP4 – H.264", vec![input("C:/in/clip.mov")], "C:/out/clip.mp4");
+        let a = build_args(&s, false, None);
+        assert_eq!(after(&a, "-i"), "C:/in/clip.mov");
+        assert_eq!(after(&a, "-c:v"), "libx264");
+        assert_eq!(after(&a, "-c:a"), "aac");
+        assert_eq!(after(&a, "-movflags"), "+faststart");
+        assert_eq!(a.last().unwrap(), "C:/out/clip.mp4");
+        assert!(!a.iter().any(|x| x == "-ss" || x == "-t"));
+        assert!(pos(&a, "-progress") < a.len() - 1);
+    }
+
+    #[test]
+    fn trim_seeks_before_the_input() {
+        let mut inp = input("a.mp4");
+        inp.edits.trim_start = 5.0;
+        inp.edits.trim_end = 12.5;
+        let a = build_args(&spec("MP4 – H.264", vec![inp], "o.mp4"), false, None);
+        assert_eq!(after(&a, "-ss"), "5.000");
+        assert_eq!(after(&a, "-t"), "7.500");
+        assert!(pos(&a, "-ss") < pos(&a, "-i") && pos(&a, "-t") < pos(&a, "-i"));
+    }
+
+    #[test]
+    fn graphics_card_is_used_only_when_asked() {
+        let mut s = spec("MP4 – H.264", vec![input("a.mp4")], "o.mp4");
+        s.hw_encoder = Some(HwEncoder { vendor: Vendor::Nvidia, codec: VCodec::H264, name: "h264_nvenc".into() });
+        s.hw_decode = Some(Vendor::Nvidia);
+        let gpu = build_args(&s, true, None);
+        assert_eq!(after(&gpu, "-c:v"), "h264_nvenc");
+        assert_eq!(after(&gpu, "-hwaccel"), "cuda");
+        let cpu = build_args(&s, false, None);
+        assert_eq!(after(&cpu, "-c:v"), "libx264");
+        assert!(!cpu.iter().any(|x| x == "-hwaccel"));
+    }
+
+    #[test]
+    fn hevc_in_mp4_is_tagged_for_apple_players() {
+        let a = build_args(&spec("MP4 – H.265 / HEVC", vec![input("a.mkv")], "o.mp4"), false, None);
+        assert_eq!(after(&a, "-c:v"), "libx265");
+        assert_eq!(after(&a, "-tag:v"), "hvc1");
+    }
+
+    #[test]
+    fn audio_profile_drops_the_picture() {
+        let a = build_args(&spec("MP3 – music (320 kbps)", vec![input("a.mp4")], "o.mp3"), false, None);
+        assert!(a.iter().any(|x| x == "-vn"));
+        assert_eq!(after(&a, "-c:a"), "libmp3lame");
+        assert_eq!(after(&a, "-b:a"), "320k");
+        assert!(!a.iter().any(|x| x == "-c:v"));
+    }
+
+    #[test]
+    fn remux_copies_streams() {
+        let a = build_args(&spec("Change container only (instant)", vec![input("a.mp4")], "o.mkv"), true, None);
+        assert_eq!(after(&a, "-c"), "copy");
+        assert_eq!(after(&a, "-map"), "0");
+        assert!(!a.iter().any(|x| x == "-vf" || x == "-hwaccel"));
+    }
+
+    #[test]
+    fn split_writes_numbered_parts() {
+        let mut s = spec("MP4 – H.264", vec![input("a.mp4")], "C:/out/movie.mp4");
+        s.split_minutes = 10.0;
+        let a = build_args(&s, false, None);
+        assert_eq!(after(&a, "-f"), "segment");
+        assert_eq!(after(&a, "-segment_time"), "600");
+        assert!(a.last().unwrap().ends_with("movie_part%02d.mp4"));
+        assert!(!a.iter().any(|x| x == "-movflags"), "faststart does not work with parts");
+        assert_eq!(split_pattern(Path::new("x/y.mkv")), PathBuf::from("x/y_part%02d.mkv"));
+    }
+
+    #[test]
+    fn merge_joins_every_input() {
+        let a = build_args(&spec("MP4 – H.264", vec![input("a.mp4"), input("b.mp4")], "o.mp4"), false, None);
+        assert_eq!(a.iter().filter(|x| *x == "-i").count(), 2);
+        let graph = after(&a, "-filter_complex");
+        assert!(graph.contains("concat=n=2:v=1:a=1[vout][aout]"), "{graph}");
+        assert!(graph.contains("scale=1920:1080"));
+        // Stream-copy merging goes through a list file instead.
+        let copy = build_args(&spec("Copy all streams into MKV", vec![input("a.mp4"), input("b.mp4")], "o.mkv"), false, Some(Path::new("list.txt")));
+        assert_eq!(after(&copy, "-f"), "concat");
+        assert_eq!(after(&copy, "-i"), "list.txt");
+    }
+
+    #[test]
+    fn edits_become_filters_in_a_fixed_order() {
+        let e = Edits { deinterlace: true, crop: [10, 20, 30, 40], rotate: 90, flip_h: true, brightness: 0.1, ..Default::default() };
+        let f = e.picture_filters();
+        assert_eq!(f[0], "yadif");
+        assert_eq!(f[1], "crop=iw-40:ih-60:10:20");
+        assert_eq!(f[2], "transpose=1");
+        assert_eq!(f[3], "hflip");
+        assert!(f[4].starts_with("eq=brightness=0.100"));
+        assert!(Edits::default().picture_filters().is_empty());
+        assert!(Edits::default().is_default());
+    }
+
+    #[test]
+    fn trimmed_length() {
+        let e = Edits { trim_start: 10.0, trim_end: 25.0, ..Default::default() };
+        assert_eq!(e.effective_duration(60.0), 15.0);
+        let to_end = Edits { trim_start: 10.0, ..Default::default() };
+        assert_eq!(to_end.effective_duration(60.0), 50.0);
+        let wrong = Edits { trim_start: 30.0, trim_end: 20.0, ..Default::default() };
+        assert_eq!(wrong.effective_duration(60.0), 0.0);
+    }
+
+    #[test]
+    fn watermark_text_cannot_break_the_filter() {
+        let e = Edits { watermark: "50% off: it's \\ here".into(), ..Default::default() };
+        let f = e.watermark_filter().unwrap();
+        assert!(f.contains("50\\% off\\: it\u{2019}s"), "{f}");
+        assert_eq!(f.matches('\'').count() % 2, 0, "quotes must stay balanced: {f}");
+        assert!(Edits { watermark: "   ".into(), ..Default::default() }.watermark_filter().is_none());
+        // Kurdish text passes through untouched.
+        let ku = Edits { watermark: "ڕێگای ئاشتی".into(), ..Default::default() }.watermark_filter().unwrap();
+        assert!(ku.contains("ڕێگای ئاشتی"));
+    }
+
+    #[test]
+    fn paths_inside_filters_are_escaped() {
+        assert_eq!(filter_path(Path::new("C:\\Videos\\a,b [x]\\it's.srt")), "C\\:/Videos/a\\,b \\[x\\]/it\\'s.srt");
+        let subs = [Track { codec: "subrip".into(), text_based: true, ..Default::default() }];
+        let f = text_subtitle_filters(Path::new("D:\\v.mkv"), &SubChoice::Burn(0), &subs, 0.0, 24);
+        assert_eq!(f, vec!["subtitles=filename='D\\:/v.mkv':si=0:force_style='Fontsize=24'".to_string()]);
+        // After a trim the subtitle clock is shifted back so lines still match.
+        let shifted = text_subtitle_filters(Path::new("v.mkv"), &SubChoice::Burn(0), &subs, 4.0, 0);
+        assert_eq!(shifted.len(), 3);
+        assert_eq!(shifted[0], "setpts=PTS+4.000/TB");
+        assert!(text_subtitle_filters(Path::new("v.mkv"), &SubChoice::None, &subs, 0.0, 0).is_empty());
+    }
+
+    #[test]
+    fn old_subtitle_encodings_are_recognised() {
+        let dir = std::env::temp_dir().join(format!("reelforge_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let utf8 = dir.join("utf8.srt");
+        std::fs::write(&utf8, "1\n00:00:01,000 --> 00:00:02,000\nسڵاو\n").unwrap();
+        assert_eq!(subtitle_charenc(&utf8), None);
+        let arabic = dir.join("cp1256.srt");
+        std::fs::write(&arabic, [0xD3u8, 0xE1, 0xC7, 0xE3, 0x20, 0xCF, 0xE4, 0xED, 0xC7]).unwrap();
+        assert_eq!(subtitle_charenc(&arabic), Some("CP1256"));
+        let latin = dir.join("cp1252.srt");
+        std::fs::write(&latin, b"Caf\xE9 au lait, s'il vous plait").unwrap();
+        assert_eq!(subtitle_charenc(&latin), Some("CP1252"));
+        let utf16 = dir.join("utf16.srt");
+        std::fs::write(&utf16, [0xFFu8, 0xFE, b'1', 0]).unwrap();
+        assert_eq!(subtitle_charenc(&utf16), Some("UTF-16LE"));
+        assert_eq!(first_subtitle_time(Path::new("x"), &SubChoice::External(utf8.clone())), Some(1.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn output_picture_size() {
+        let info = video_info();
+        assert_eq!(out_dims(&profile("MP4 – H.264"), &info, &Edits::default()), (1920, 1080));
+        assert_eq!(out_dims(&profile("MP4 – tiny file for sharing (720p)"), &info, &Edits::default()), (1280, 720));
+        let turned = Edits { rotate: 90, ..Default::default() };
+        assert_eq!(out_dims(&profile("MP4 – H.264"), &info, &turned), (1080, 1920));
+        let cropped = Edits { crop: [100, 0, 100, 0], ..Default::default() };
+        assert_eq!(out_dims(&profile("MP4 – H.264"), &info, &cropped), (1720, 1080));
+    }
+
+    #[test]
+    fn size_estimate_follows_length_and_quality() {
+        let info = video_info();
+        let full = estimate_output(&profile("MP4 – H.264"), &info, &Edits::default(), 0).unwrap();
+        let half = estimate_output(&profile("MP4 – H.264"), &info, &Edits { trim_end: 30.0, ..Default::default() }, 0).unwrap();
+        assert!((half as f64 / full as f64 - 0.5).abs() < 0.01);
+        let small = estimate_output(&profile("MP4 – tiny file for sharing (720p)"), &info, &Edits::default(), 0).unwrap();
+        assert!(small < full);
+        // Never promises more than the source for the same codec and size.
+        assert!(full <= info.size * 11 / 10, "{full}");
+        let no_length = MediaInfo { duration: 0.0, ..video_info() };
+        assert_eq!(estimate_output(&profile("MP4 – H.264"), &no_length, &Edits::default(), 0), None);
+    }
+
+    #[test]
+    fn track_labels_keep_the_title_as_written() {
+        let t = Track { codec: "aac".into(), lang: "kur".into(), title: "دەنگی ڕەسەن".into(), channels: 6, ..Default::default() };
+        assert_eq!(t.label(1), "#2 aac [kur] 5.1 – دەنگی ڕەسەن");
+    }
+
+    /// Runs a real conversion with FFmpeg; skipped when FFmpeg is not installed.
+    #[test]
+    fn a_stopped_or_failed_conversion_leaves_no_broken_file() {
+        let Some(ff) = ffmpeg_path() else { return };
+        let dir = std::env::temp_dir().join(format!("reelforge_job_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("source.mp4");
+        let made = hidden_command(&ff)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=30", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&src)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(made, "could not make the sample clip");
+        let ctx = eframe::egui::Context::default();
+        let wait = |job: &JobHandle| {
+            let t0 = Instant::now();
+            while !job.state.lock().unwrap().finished && t0.elapsed().as_secs() < 120 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            job.state.lock().unwrap().clone()
+        };
+        let job_for = |source: &Path, out: &Path| {
+            let mut inp = input("x");
+            inp.path = source.to_path_buf();
+            inp.info = probe(source);
+            // A slow profile, so there is time to stop it half-way.
+            JobSpec { inputs: vec![inp], profile: profile("MKV – best quality archive (H.265 10-bit)"), output: out.to_path_buf(), hw_encoder: None, hw_decode: None, threads: 1, split_minutes: 0.0 }
+        };
+
+        // 1. Stopped half-way: the half-written file is removed.
+        let out = dir.join("stopped.mkv");
+        let job = start_job(job_for(&src, &out), ctx.clone());
+        let t0 = Instant::now();
+        while !out.exists() && !job.state.lock().unwrap().finished && t0.elapsed().as_secs() < 60 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(out.exists(), "the conversion should have started writing");
+        job.cancel();
+        let st = wait(&job);
+        assert!(st.cancelled && !st.ok);
+        assert!(!out.exists(), "the half-written file should be gone");
+
+        // 2. Failed (the source is missing): a file that was already there is kept.
+        let keep = dir.join("mine.mkv");
+        std::fs::write(&keep, b"my own file").unwrap();
+        let st = wait(&start_job(job_for(&dir.join("missing.mp4"), &keep), ctx.clone()));
+        assert!(!st.ok && !st.cancelled && !st.error.is_empty());
+        assert_eq!(std::fs::read(&keep).unwrap(), b"my own file");
+
+        // 3. Failed with nothing there before: nothing is left behind.
+        let none = dir.join("nothing.mkv");
+        let st = wait(&start_job(job_for(&dir.join("missing.mp4"), &none), ctx.clone()));
+        assert!(!st.ok);
+        assert!(!none.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reading_files_is_limited_and_complete() {
+        use std::sync::atomic::AtomicUsize;
+        static RUNNING: AtomicUsize = AtomicUsize::new(0);
+        static PEAK: AtomicUsize = AtomicUsize::new(0);
+        let pool = ProbePool::default();
+        for id in 0..40u64 {
+            pool.submit_with(
+                id,
+                PathBuf::from(format!("{id}.mp4")),
+                |p| {
+                    let now = RUNNING.fetch_add(1, Ordering::SeqCst) + 1;
+                    PEAK.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    RUNNING.fetch_sub(1, Ordering::SeqCst);
+                    MediaInfo { error: p.to_string_lossy().to_string(), ..Default::default() }
+                },
+                || {},
+            );
+        }
+        let t0 = Instant::now();
+        while pool.busy() && t0.elapsed().as_secs() < 20 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let got = pool.inbox.lock().unwrap();
+        assert_eq!(got.len(), 40);
+        let mut ids: Vec<u64> = got.iter().map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..40).collect::<Vec<u64>>());
+        assert!(got.iter().all(|(id, info)| info.error == format!("{id}.mp4")));
+        let peak = PEAK.load(Ordering::SeqCst);
+        assert!((1..=PROBE_WORKERS).contains(&peak), "peak {peak}");
+    }
 }

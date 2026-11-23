@@ -129,10 +129,9 @@ impl GpuReport {
         match choice {
             AccelChoice::CpuOnly => None,
             AccelChoice::Vendor(v) => self.vendors().into_iter().find(|x| *x == v).or_else(|| self.adapters.iter().map(|a| a.vendor).find(|x| *x == v)),
-            AccelChoice::Auto => self
-                .pick(VCodec::H264, AccelChoice::Auto)
-                .map(|e| e.vendor)
-                .or_else(|| self.adapters.iter().map(|a| a.vendor).filter(|v| *v != Vendor::Other).min_by_key(|v| v.rank())),
+            AccelChoice::Auto => {
+                self.pick(VCodec::H264, AccelChoice::Auto).map(|e| e.vendor).or_else(|| self.adapters.iter().map(|a| a.vendor).filter(|v| *v != Vendor::Other).min_by_key(|v| v.rank()))
+            }
         }
     }
 
@@ -168,12 +167,7 @@ fn list_adapters() -> Vec<Adapter> {
     #[cfg(windows)]
     {
         let cmd = hidden_command("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + '|' + $_.AdapterCompatibility }",
-            ])
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + '|' + $_.AdapterCompatibility }"])
             .output();
         if let Ok(o) = cmd {
             for line in String::from_utf8_lossy(&o.stdout).lines() {
@@ -212,20 +206,14 @@ fn list_adapters() -> Vec<Adapter> {
 }
 
 fn probe_encoder(ffmpeg: &std::path::Path, enc: &str) -> bool {
-    let mut args: Vec<&str> = vec![
-        "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=0.2",
-    ];
+    let mut args: Vec<&str> = vec!["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=0.2"];
     if enc.ends_with("_qsv") {
         args.extend(["-pix_fmt", "nv12"]);
     } else {
         args.extend(["-pix_fmt", "yuv420p"]);
     }
     args.extend(["-c:v", enc, "-f", "null", "-"]);
-    hidden_command(ffmpeg)
-        .args(&args)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    hidden_command(ffmpeg).args(&args).output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// Run detection in the background and fill the shared report.
@@ -239,13 +227,7 @@ pub fn detect_async(report: Arc<Mutex<GpuReport>>, ctx: eframe::egui::Context) {
                 for (codec, base) in [(VCodec::H264, "h264"), (VCodec::H265, "hevc"), (VCodec::Av1, "av1")] {
                     let name = format!("{}_{}", base, vendor.suffix());
                     let ff = ff.clone();
-                    handles.push(std::thread::spawn(move || {
-                        if probe_encoder(&ff, &name) {
-                            Some(HwEncoder { vendor, codec, name })
-                        } else {
-                            None
-                        }
-                    }));
+                    handles.push(std::thread::spawn(move || if probe_encoder(&ff, &name) { Some(HwEncoder { vendor, codec, name }) } else { None }));
                 }
             }
             for h in handles {
